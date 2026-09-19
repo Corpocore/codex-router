@@ -297,6 +297,15 @@
   all of this; its `unaccountedLines` helper moves to `yaml-structure.mjs` and
   both managers now share it. Anything this reader cannot account for is
   refused with the file untouched and the offending line named.
+- **The bundled `codex-router` skill no longer documents the subagent model
+  pinning the router stopped doing.** An explicit `spawn_agent.model` is kept;
+  only a call that omits the model inherits the routed parent. That shipped as
+  a code change, a `.claude/skills/codex-subagents` rewrite and a
+  `docs/HOW-IT-WORKS.md` update, but `skills/codex-router/SKILL.md` -- the copy
+  installed into every user's `~/.codex/skills` -- still told its reader that
+  in-session subagents are always pinned to the parent, and so did the comment
+  above `SPAWN_MODEL_TOOLS`. Both are corrected, and a source assertion now
+  fails on the stale claim so the next drift is not silent.
 - **An apostrophe in a harness config no longer moves the router's route into
   somebody else's value.** `yaml-structure.mjs` treated every `'` and `"` as a
   quoting indicator, but YAML only gives a quote that meaning where a node can
