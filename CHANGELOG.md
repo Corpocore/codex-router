@@ -10,6 +10,52 @@
   reasoning and returns it with the matching tool calls. After a restart or an
   eviction it falls back to the old behavior, and
   `CODEX_ROUTER_GROK_REASONING_CARRY=0` turns it off (#888).
+- **An overloaded machine no longer makes the router kill a working LiteLLM
+  gateway.** The liveness watchdog stopped the gateway after three missed 4 s
+  probes, and it treated a probe that *timed out* the same as one that was
+  *refused*. With a load average in the hundreds, a healthy gateway that was
+  still streaming a routed turn missed those probes. The kill cut the turn off
+  partway through its reasoning, and the replacement could not finish importing
+  within its 5-minute cold-start budget under the same load. It was then killed
+  and restarted from scratch, so every routed model answered `502 ... the
+  upstream refused the connection` for minutes. Now only refusals trip the
+  short fuse. Timeouts need 20 in a row
+  (`CODEX_ROUTER_GATEWAY_HEALTH_STALL_FAILURES`), and a replacement that is
+  still running gets up to three cold-start budgets before it is restarted.
+- **ClinePass models no longer break the Codex model catalog.** To hide the
+  effort selector ClinePass cannot honor, the catalog dropped
+  `supported_reasoning_levels` from ClinePass entries, but Codex requires that
+  key: with it missing, Codex failed to parse the whole `model_catalog_json`
+  with `missing field supported_reasoning_levels`. ClinePass entries now publish
+  an empty ladder, which hides the selector and stays schema-valid. The router
+  still strips `reasoning_effort`, `thinking`, and `top_p` before forwarding to
+  ClinePass. (#870)
+- **MiMo on opencode Go now accepts pasted images and uses its full window.**
+  The V2.6 Flash, V2.6 Pro, and V2.5 routes were shipped text-only because
+  OpenCode published no modalities for them at the time; OpenCode's own
+  metadata (the `opencode-go` provider on models.dev) now lists image input,
+  and a live image request answered correctly on all three. V2.6 Flash, V2.6
+  Pro, and V2.5 Pro also move from the 1,000,000-token fallback to the
+  1,048,576 window that catalog publishes -- the figure every other V2.6 route
+  already uses -- with compaction at 900,000. V2.5 Pro stays text-only, as
+  published.
+- **A stopped local gateway no longer tells you to configure a proxy.** When
+  the router's own LiteLLM gateway on `127.0.0.1:4200` was down (for example
+  restarting under heavy machine load), requests failed with "the upstream
+  refused the connection" and advice to set `NODE_USE_ENV_PROXY=1`. A refused
+  socket names its host in `address`, not `hostname`, so the router never saw
+  that the host was loopback. It now reads that field, and the error says
+  `127.0.0.1 refused the connection` with the `./bin/doctor --fix` hint for
+  the install's own processes.
+- **Installing no longer tells you to quit a Codex that is already closed.**
+  Quitting the desktop app leaves Chromium's crash reporter
+  (`browser_crashpad_handler`) running for hours, reparented to launchd, under
+  the Codex Framework path the running-client check matches, so the install
+  named it as "Codex is running right now". Crash reporters are no longer
+  counted on macOS, Linux, or Windows, and a listing made only of helper
+  processes -- the residue of an app that already quit -- reports the client as
+  not running. A running app is still named by its main process. On Windows,
+  Cursor's quoted executable path is now recognized too.
 - **Adding a provider key now shows the connection being made instead of
   nothing at all.** Saving a credential runs one router command that writes the
   key, enables the provider, and republishes every installed client's catalog
