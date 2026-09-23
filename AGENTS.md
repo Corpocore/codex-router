@@ -811,7 +811,20 @@ to ship tested support to every installer.
 5. Local curation writes protected `user-models.json` state and survives router
    updates. Never edit the checked-in `config/` registry tree merely to
    satisfy one machine's
-   request. The provider's own `/v1/models` endpoint alone decides which
+   request. To delete a locally curated model, run
+   `./bin/curate-models PROVIDER --remove ID1,ID2 --apply`, which prunes the
+   overlay and republishes every installed client. Removal only ever touches
+   `user-models.json`: a checked-in route cannot be deleted this way, and an
+   entry the registry merge skipped is still removable by its upstream id.
+   Pass `--dry-run` to see which entries a run would add or remove without
+   writing anything. `--no-apply` is *not* a rehearsal — it persists the
+   overlay and defers only publication, so a removal under it really deletes.
+   The Control Center offers the same removal per route: a locally curated
+   route is tagged `Local` and carries a delete control, which asks the router
+   to resolve the slug against the overlay rather than deriving an upstream id
+   in the renderer. The snapshot marks those routes with `local: true`, from
+   `LOCAL_MODEL_SLUGS` in `src/model-registry.mjs` — the merge is the only
+   place that still knows which side a route came from. The provider's own `/v1/models` endpoint alone decides which
    models exist. Interactive curation asks for each new model's context
    window, image support, and reasoning efforts (so the user can switch
    effort in the picker); the deterministic `--models` form takes
