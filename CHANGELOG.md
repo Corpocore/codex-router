@@ -87,6 +87,13 @@
   of as a candidate, and `doctor` says so where it suggests curating the free
   tier. An id already in an operator's configuration is untouched and still
   resolves to its documented route.
+- **A locally curated model can now be deleted from the Control Center.**
+  Routes that came from the `user-models.json` overlay are tagged `Local` on
+  the Models page and carry a delete control that asks for confirmation; the
+  router resolves each slug against the overlay and runs
+  `curate-models PROVIDER --remove ... --apply`, so a checked-in route can
+  never be offered for deletion. `curate-models` also gains `--dry-run`,
+  which prints what a run would add or remove without writing anything.
 - **A long session's images can no longer cross the provider's ceiling and fail
   the whole turn.** A conversation replays every image it still holds on every
   following turn, so a session that views screenshots grows until one request

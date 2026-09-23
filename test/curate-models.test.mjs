@@ -534,6 +534,88 @@ test("--remove edits local curation without provider credentials or discovery", 
   }
 });
 
+// --no-apply reads like a rehearsal but only defers publication: it still
+// persists the overlay, so a removal run under it really deletes. --dry-run is
+// the rehearsal, and the distinction only matters if it writes nothing at all.
+test("--dry-run reports the removal it would make and leaves the overlay alone", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-models-dry-run-"));
+  const file = path.join(dir, "user-models.json");
+  const kept = curated("accounts/fireworks/models/kimi-k3");
+  const doomed = curated("accounts/fireworks/models/deepseek-v4-flash");
+  const before = JSON.stringify({ version: 1, models: [kept, doomed] });
+  writeFileSync(file, before);
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(root, "src", "curate-models.mjs"),
+        "fireworks",
+        "--remove",
+        doomed.upstreamModel,
+        "--dry-run",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIREWORKS_API_KEY: "",
+          MODEL_ROUTER_USER_MODELS: file,
+          MODEL_ROUTER_STATE_DIR: dir,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Dry run/);
+    assert.match(result.stdout, /Nothing was written/);
+    // It has to name the model, or the rehearsal cannot be checked before the
+    // real run is authorised.
+    assert.ok(
+      result.stdout.includes(`- ${doomed.upstreamModel}`),
+      `the dry run must name ${doomed.upstreamModel}; got:\n${result.stdout}`,
+    );
+    assert.equal(readFileSync(file, "utf8"), before, "a dry run must not touch the overlay");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--dry-run refuses to be combined with a flag that writes", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-models-dry-run-guard-"));
+  const file = path.join(dir, "user-models.json");
+  const doomed = curated("accounts/fireworks/models/deepseek-v4-flash");
+  writeFileSync(file, JSON.stringify({ version: 1, models: [doomed] }));
+  try {
+    for (const flag of ["--apply", "--no-apply"]) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          path.join(root, "src", "curate-models.mjs"),
+          "fireworks",
+          "--remove",
+          doomed.upstreamModel,
+          "--dry-run",
+          flag,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FIREWORKS_API_KEY: "",
+            MODEL_ROUTER_USER_MODELS: file,
+            MODEL_ROUTER_STATE_DIR: dir,
+          },
+        },
+      );
+      assert.notEqual(result.status, 0, `${flag} must not be accepted beside --dry-run`);
+      assert.match(result.stderr, /--dry-run writes nothing/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("interactive deselection remains authoritative", () => {
   const kept = curated("accounts/fireworks/models/kimi-k3");
   const removed = curated("accounts/fireworks/models/deepseek-v4-flash");
