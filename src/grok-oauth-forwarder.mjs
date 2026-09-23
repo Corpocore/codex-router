@@ -51,7 +51,7 @@ import { installStableFetchTransport } from "./fetch-transport.mjs";
 import { createGrokInflightGate, grokInflightLimit, responseWithInflightRelease } from "./grok-inflight.mjs";
 import { grokTransportIdleTimeoutMs } from "./grok-stream-timeouts.mjs";
 import {
-  certifiedReasoningItems, createReasoningCarryStore, reasoningCarryEnabled,
+  certifiedReasoningItems, createReasoningCarryStore, reasoningCarryEnabled, reasoningCarryScope,
 } from "./grok-reasoning-carry.mjs";
 
 // This process carries only Grok traffic, so its whole pool outlasts the
@@ -588,10 +588,11 @@ async function handleChatCompletions(request, response) {
   const hostedSearchEnabled = hostedSearchEnabledFor(model);
   const viewImageAlias = shouldAliasViewImageForGrok(chat);
   const conversationKey = conversationId(chat?.messages);
+  const carryScope = reasoningCarryScope(conversationKey, model);
   const carryCounts = { hits: 0, misses: 0 };
   const recallReasoning = reasoningCarry
     ? (callIds) => {
-        const items = reasoningCarry.recall(conversationKey, callIds);
+        const items = reasoningCarry.recall(carryScope, callIds);
         carryCounts[items ? "hits" : "misses"]++;
         return items;
       }
@@ -830,7 +831,7 @@ async function handleChatCompletions(request, response) {
   // legal now. Withheld/backfilled deltas stay withheld on failure.
   if (rejectUnsuccessfulTurn(turn, "attempt", firstAttempt)) return;
   // Only a completed response certifies its reasoning for the next request.
-  reasoningCarry?.remember(conversationKey, turn.toolCalls.map((call) => call.id),
+  reasoningCarry?.remember(carryScope, turn.toolCalls.map((call) => call.id),
     certifiedReasoningItems(upstreamOutputItems));
   emitPendingDeltas();
   let retried = false;

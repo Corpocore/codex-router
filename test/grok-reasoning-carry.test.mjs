@@ -12,6 +12,7 @@ import {
   certifiedReasoningItems,
   createReasoningCarryStore,
   reasoningCarryEnabled,
+  reasoningCarryScope,
 } from "../src/grok-reasoning-carry.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -34,6 +35,18 @@ test("store keeps only certified encrypted reasoning, keyed by session and first
   assert.equal(store.recall("s1", ["a"], 1), undefined, "oldest entry is evicted at capacity");
   assert.equal(store.stats().entries, 2);
   assert.equal(reasoningCarryEnabled({ CODEX_ROUTER_GROK_REASONING_CARRY: "0" }), false);
+});
+
+test("store scope includes the model, so another Grok model never receives the reasoning", () => {
+  const store = createReasoningCarryStore();
+  const items = certifiedReasoningItems([REASONING]);
+  store.remember(reasoningCarryScope("conv-1", "grok-4.7"), ["call_1"], items, 0);
+  assert.equal(store.recall(reasoningCarryScope("conv-1", "grok-4.7"), ["call_1"], 1)[0].encrypted_content,
+    "ENC_FIXTURE_TURN_1");
+  assert.equal(store.recall(reasoningCarryScope("conv-1", "grok-4.5"), ["call_1"], 1), undefined,
+    "a different model in the same conversation must miss");
+  assert.equal(store.recall(reasoningCarryScope("conv-2", "grok-4.7"), ["call_1"], 1), undefined);
+  assert.equal(reasoningCarryScope("", "grok-4.7"), undefined, "no conversation, no scope");
 });
 
 test("toResponsesRequest puts carried reasoning in front of the turn that produced it", () => {
@@ -101,8 +114,8 @@ test("forwarder returns xAI's encrypted reasoning on the next tool-loop request"
     }
     return messages;
   };
-  const post = async (task, turns) => (await fetch(`${base}/v1/chat/completions`, { method: "POST", headers,
-    body: JSON.stringify({ model: "grok-4.7", stream: true, reasoning_effort: "high", messages: history(task, turns),
+  const post = async (task, turns, model = "grok-4.7") => (await fetch(`${base}/v1/chat/completions`, {
+    method: "POST", headers, body: JSON.stringify({ model, stream: true, reasoning_effort: "high", messages: history(task, turns),
       tools: [{ type: "function", function: { name: "exec_command", parameters: { type: "object", properties: {} } } }] }) })).text();
   try {
     for (let i = 0; i < 100; i++) {
@@ -127,6 +140,9 @@ test("forwarder returns xAI's encrypted reasoning on the next tool-loop request"
     await post("audit fixture A", [1, 2, 3]);
     const afterFailure = seen[4].input.filter((item) => item.type === "reasoning").map((item) => item.encrypted_content);
     assert.deepEqual(afterFailure, ["ENC_TURN_1", "ENC_TURN_2"], "a failed response must not be replayed");
+    await post("audit fixture A", [1], "grok-4.5");
+    assert.equal(seen[5].input.some((item) => item.type === "reasoning"), false,
+      "reasoning from grok-4.7 must not be replayed to another model mid-thread");
     const health = await (await fetch(`${base}/health`, { headers })).json();
     assert.equal(health.reasoningCarry.version, 1);
     assert.ok(health.reasoningCarry.hits >= 3);

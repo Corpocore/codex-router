@@ -18,6 +18,15 @@ export function reasoningCarryEnabled(env = process.env) {
   return env.CODEX_ROUTER_GROK_REASONING_CARRY !== "0";
 }
 
+// Encrypted reasoning belongs to the model that produced it. Codex can switch
+// Grok models mid-thread without changing the conversation's first messages, so
+// the store scope includes the model: a turn on another model misses and sends
+// no reasoning rather than replaying bytes that model never produced.
+export function reasoningCarryScope(conversationKey, model) {
+  if (!conversationKey) return undefined;
+  return `${typeof model === "string" ? model : ""}\0${conversationKey}`;
+}
+
 export function certifiedReasoningItems(items) {
   return (items || [])
     .filter((item) => item?.type === "reasoning" && typeof item.encrypted_content === "string" && item.encrypted_content)
