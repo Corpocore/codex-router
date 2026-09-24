@@ -2295,6 +2295,21 @@ retry rules on the shared path.
   (#840). Keep this policy shared
   between hops without applying direct DeepSeek sampling parameters to resellers.
   Command Code's schema-strict `/alpha/generate` fallback remains separate.
+- Grok OAuth is the Responses-native case of the same rule. xAI returns each
+  turn's reasoning as an opaque `encrypted_content` item, and grok-4.7 keeps
+  reasoning through a tool loop only when that item comes back. Without it the
+  model stops reasoning from about the third round, plans in visible text, and
+  can repeat one progress sentence for minutes (live A/B, 23 September 2026:
+  carried 24/24 steps reasoned; dropped or summary-only 0/18 from step 3). The
+  Chat hop through LiteLLM cannot carry the item, so
+  `src/grok-reasoning-carry.mjs` keeps a completed response's certified
+  reasoning items in the forwarder, keyed by the conversation and the call ID
+  of its first tool call, and `toResponsesRequest` puts them back in front of
+  the same calls. They are xAI's own bytes, never router-authored text. A miss
+  (restart, eviction, rewritten history) sends no reasoning, exactly as before;
+  failed or incomplete responses are never remembered.
+  `CODEX_ROUTER_GROK_REASONING_CARRY=0` turns it off. Coverage lives in
+  `test/grok-reasoning-carry.test.mjs`.
 
 Regression coverage lives in `test/deepseek-responses-routing.test.mjs`,
 `test/namespace-relay-custom.test.mjs`, `test/chat-reasoning.test.mjs` and the
