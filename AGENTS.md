@@ -733,19 +733,33 @@ and every client saw a bare "Connection error" naming nothing.
    wheel-availability floor. `scripts/verify-zai-litellm-usage.mjs` exercises
    the pinned LiteLLM bridge with synthetic authoritative usage on every Python
    lock job.
-9. **Z.ai Responses streams need a post-LiteLLM message-envelope repair.**
-   Live GLM-5.3 traffic through LiteLLM 1.96 can finish a reasoning item and
-   then emit `response.output_text.delta` for the assistant message without the
-   required `response.output_item.added` / `response.content_part.added`
-   envelope. The same malformed stream can reuse reasoning's `output_index=0`
-   for the message and close the message with a `reasoning_text` content part.
-   `src/zai-responses-compat.mjs` repairs only that Z.ai event-stream shape
-   after LiteLLM translation: valid streams remain byte-identical, native
-   OpenAI traffic is never attached to the transform, and provider reasoning
-   must never be copied into assistant-visible message content. A real Codex
-   live probe is the regression oracle: no `OutputTextDelta without active
-   item` warnings and the message occupies the next output index after
-   reasoning.
+9. **Chat Completions Responses streams need a post-LiteLLM message-envelope
+   repair.** When the first upstream chunk carries reasoning, LiteLLM 1.96
+   finishes a reasoning item and then emits `response.output_text.delta` for
+   the assistant message without the required `response.output_item.added` /
+   `response.content_part.added` envelope. It reuses the reasoning item's
+   `output_index=0` for the message and closes it with a `reasoning_text`
+   content part. In a tool turn it also closes an empty message that it never
+   opened, after the function call. First seen on Z.ai GLM-5.3. It was
+   reproduced live on OpenRouter (`mimo-v2.6-flash`,
+   `stealth/space-bunny-alpha`, 2026-09-24) and offline against the pinned
+   LiteLLM with a synthetic upstream, so the shape comes from the bridge and
+   not from any one provider.
+   `messageEnvelopeCompatTransform` in `src/zai-responses-compat.mjs` therefore
+   attaches to every `protocol: "openai"` (default) route. Exclusions: direct
+   DeepSeek, which has its own bridge repair; `openai-responses` providers,
+   which skip the bridge; and native traffic. Anthropic Messages routes are
+   excluded too, because they arrive message-first and no capture shows this
+   shape there, so widening to them needs one. Rules: an unchanged block is
+   relayed as the exact bytes that arrived. A frame that is not valid UTF-8
+   switches the stage off for the rest of the response. Content parts of an
+   item opened as something other than a message are never adopted. Provider
+   reasoning must never be copied into assistant-visible message content. The
+   regression oracle is a real Codex live probe: no `OutputTextDelta without
+   active item` errors, and the message takes the next output index after the
+   reasoning item. The router case is "router gives OpenRouter Chat
+   Completions text a message envelope after reasoning" in
+   `test/routing.test.mjs`.
 10. **LiteLLM custom-tool streaming uses a mixed lifecycle.** LiteLLM 1.96
    converts Responses `type: "custom"` tools into Chat Completions functions
    whose one required string property is `content`. On the return stream it can
