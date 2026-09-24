@@ -2831,7 +2831,12 @@ the same OS user to sign in or authorize once per harness buys nothing.
   substituted — a Codex turn is never rewritten. `reasoning`, `tool_choice`,
   `parallel_tool_calls`, and `instructions` are accepted and must survive; the
   strip is a denylist for that reason, not a whitelist. Measure any change to
-  that list against the live endpoint rather than guessing.
+  that list against the live endpoint rather than guessing. For the same
+  caller, a string `input` ("Input must be a list") is wrapped into one user
+  message, and a non-streaming request ("Stream must be set to true") is sent
+  with `stream: true` and its SSE folded back into one JSON response — the
+  `response.completed` snapshot, with its `output` filled from the
+  `output_item.done` events when the backend leaves it empty (#862).
 - **Publishable exactly while spendable.** `dshRoutedModels()` includes native
   models only while `nativeSessionAvailable()` is true, so the harness is never
   offered a model that would 401. `visibility: "hide"` entries stay unpublished:
