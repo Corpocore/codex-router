@@ -2288,7 +2288,11 @@ retry rules on the shared path.
   `summary`, so visible text can be the only replay that survives there. Weigh
   the two separately rather than making either the house style. Remove only successfully carried
   reasoning runs so plaintext cannot also become a user message. Do not mutate
-  source items or change other native Responses routes. Keep this policy shared
+  source items or change other native Responses routes: the carry runs only on
+  Chat Completions routes, and every `openai-responses` provider, generic ones
+  included, receives its reasoning items unchanged. The helper is not a no-op
+  with its flags off — it turned reasoning into visible `output_text` there
+  (#840). Keep this policy shared
   between hops without applying direct DeepSeek sampling parameters to resellers.
   Command Code's schema-strict `/alpha/generate` fallback remains separate.
 
