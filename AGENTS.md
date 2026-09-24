@@ -2288,7 +2288,11 @@ retry rules on the shared path.
   `summary`, so visible text can be the only replay that survives there. Weigh
   the two separately rather than making either the house style. Remove only successfully carried
   reasoning runs so plaintext cannot also become a user message. Do not mutate
-  source items or change other native Responses routes. Keep this policy shared
+  source items or change other native Responses routes: the carry runs only on
+  Chat Completions routes, and every `openai-responses` provider, generic ones
+  included, receives its reasoning items unchanged. The helper is not a no-op
+  with its flags off — it turned reasoning into visible `output_text` there
+  (#840). Keep this policy shared
   between hops without applying direct DeepSeek sampling parameters to resellers.
   Command Code's schema-strict `/alpha/generate` fallback remains separate.
 
@@ -2831,7 +2835,12 @@ the same OS user to sign in or authorize once per harness buys nothing.
   substituted — a Codex turn is never rewritten. `reasoning`, `tool_choice`,
   `parallel_tool_calls`, and `instructions` are accepted and must survive; the
   strip is a denylist for that reason, not a whitelist. Measure any change to
-  that list against the live endpoint rather than guessing.
+  that list against the live endpoint rather than guessing. For the same
+  caller, a string `input` ("Input must be a list") is wrapped into one user
+  message, and a non-streaming request ("Stream must be set to true") is sent
+  with `stream: true` and its SSE folded back into one JSON response — the
+  `response.completed` snapshot, with its `output` filled from the
+  `output_item.done` events when the backend leaves it empty (#862).
 - **Publishable exactly while spendable.** `dshRoutedModels()` includes native
   models only while `nativeSessionAvailable()` is true, so the harness is never
   offered a model that would 401. `visibility: "hide"` entries stay unpublished:

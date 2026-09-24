@@ -140,7 +140,10 @@ function registryFragmentFiles(root) {
 function parseFragment(file) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(file, "utf8"));
+    // Windows editors (PowerShell's Set-Content, Notepad) save UTF-8 with a
+    // leading byte-order mark, which JSON.parse rejects (#887). The registry
+    // is hand-edited configuration, so accept the mark.
+    parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
   } catch (error) {
     fail(`${file}: ${error instanceof Error ? error.message : String(error)}`);
   }
