@@ -227,6 +227,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "openrouter/muse-spark-1.3-contributor",
       "openrouter/muse-spark-1.3",
       "openrouter/qwen3.8-flash",
+      "openrouter/stealth/space-bunny-alpha",
       "qwen-plan/deepseek-v4-flash-0731",
       "qwen-plan/deepseek-v4-pro-0813",
       "qwen-plan/deepseek-v4-pro",
