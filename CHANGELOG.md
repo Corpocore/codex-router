@@ -21,15 +21,6 @@
   connect failure is now detected at 3.5s instead of 10.0s.
   (`CODEX_ROUTER_NATIVE_RETRIES`, `CODEX_ROUTER_NATIVE_RETRY_BACKOFF_MS` and
   `CODEX_ROUTER_NATIVE_RETRY_BUDGET_MS` still tune the loop; `0` disables it.)
-- **Grok keeps reasoning through long tool loops.** xAI returns each turn's
-  reasoning as an encrypted item that must come back in the next request, and
-  the Grok OAuth bridge's Chat hop dropped it. Without it, Grok 4.7 stopped
-  reasoning after two or three tool rounds even at `xhigh`, planned in visible
-  text instead, and could repeat one progress sentence until someone
-  interrupted it. The forwarder now remembers each completed response's
-  reasoning and returns it with the matching tool calls. After a restart or an
-  eviction it falls back to the old behavior, and
-  `CODEX_ROUTER_GROK_REASONING_CARRY=0` turns it off (#888).
 - **An overloaded machine no longer makes the router kill a working LiteLLM
   gateway.** The liveness watchdog stopped the gateway after three missed 4 s
   probes, and it treated a probe that *timed out* the same as one that was
