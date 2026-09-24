@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -2049,6 +2049,30 @@ test("a populated overlay marks its own routes local and leaves the checked-in t
     assert.deepEqual(parsed.local, [slug]);
     // The guarantee the delete control depends on.
     assert.deepEqual(parsed.leaked, [], "a checked-in slug must never be marked local");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("registry fragments saved with a UTF-8 byte-order mark still load", () => {
+  // PowerShell's Set-Content and Notepad on Windows write UTF-8 with a BOM,
+  // which JSON.parse rejects as an unexpected token (#887).
+  const dir = mkdtempSync(path.join(os.tmpdir(), "registry-bom-test-"));
+  try {
+    const registryPath = path.join(dir, "providers.json");
+    writeFileSync(registryPath, `﻿${JSON.stringify(readRegistryDocument("config"), null, 2)}\n`);
+    const document = readRegistryDocument(registryPath);
+    assert.ok(document.models.some((model) => model.slug === "deepseek/deepseek-v4-pro"));
+
+    const vendor = path.join(dir, "tree", "deepseek");
+    mkdirSync(vendor, { recursive: true });
+    for (const name of ["deepseek.json", "deepseek-v4-pro.json"]) {
+      const text = readFileSync(path.join(root, "config", "deepseek", name), "utf8");
+      writeFileSync(path.join(vendor, name), `﻿${text}`);
+    }
+    const merged = readRegistryDocument(path.join(dir, "tree"));
+    assert.ok(merged.models.some((model) => model.slug === "deepseek/deepseek-v4-pro"));
+    assert.ok(merged.providers.some((provider) => provider.id === "deepseek"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
