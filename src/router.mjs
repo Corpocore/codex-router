@@ -107,6 +107,7 @@ import { discoveryDisabled } from "./discovery-mode.mjs";
 import { readNativeAliases } from "./native-alias.mjs";
 import { nativeContextVariantBase } from "./native-context-variants.mjs";
 import { normalizeNativeReasoningEffort } from "./native-reasoning-effort.mjs";
+import { foldResponsesSse, nativeInputAsList } from "./native-buffered-response.mjs";
 import { readNativeRedirect } from "./native-redirect.mjs";
 import {
   autoReviewFallbackEngaged,
@@ -4154,6 +4155,7 @@ async function handleResponses(request, response, requestUrl) {
   let toolResultAging;
   let imageBudget;
   let pendingInterrupts = [];
+  let bufferNativeStream = false;
   let emptyCompletion = false;
   let emptyCompletionRetried = false;
   // The model the operator actually asked for, when this turn ended up being
@@ -4528,8 +4530,13 @@ async function handleResponses(request, response, requestUrl) {
       if (variantBase) native.model = variantBase;
       normalizeNativeEffortCompatibility(native);
       normalizeNativePromptCacheCompatibility(native);
-      if (Array.isArray(payload.input)) {
-        native.input = normalizeNativeInput(payload.input, {
+      // The backend answers a string `input` with a bare "Input must be a
+      // list" 400. Like the rest of the substituted-caller normalization, only
+      // a generic client's shorthand is rewritten, into the one user message
+      // it means (#862); a caller with its own credential is relayed as sent.
+      if (substitutedCaller) native.input = nativeInputAsList(native.input);
+      if (Array.isArray(native.input)) {
+        native.input = normalizeNativeInput(native.input, {
           // Every substituted caller needs provenance-safe full reasoning.
           // V1 compaction alone has a stored-reference contract, so it keeps
           // bare rs_ references while ordinary/V2 stateless replay drops them.
@@ -4561,6 +4568,14 @@ async function handleResponses(request, response, requestUrl) {
       if (!compactV1) delete native.previous_response_id;
       if (substitutedCaller) {
         normalizeNativeForSubstitutedCaller(native, { compact: compactV1 });
+        // The backend only streams ("Stream must be set to true"). A generic
+        // client that asked for one JSON object still gets one: ask for the
+        // stream and fold it below (#862). Compaction V1 is its own JSON
+        // endpoint and is left alone.
+        if (!compactV1 && native.stream !== true) {
+          native.stream = true;
+          bufferNativeStream = true;
+        }
       }
       target = nativeTarget(requestUrl.pathname);
       headers = nativeHeaders(request);
@@ -4806,6 +4821,23 @@ async function handleResponses(request, response, requestUrl) {
     // predicate is structural (this request, these bytes, an explicit zero),
     // so it cannot fire on a provider that reports correctly and it disables
     // itself the moment the upstream starts reporting again.
+    if (
+      bufferNativeStream &&
+      upstream.ok &&
+      /text\/event-stream/i.test(upstream.headers.get("content-type") || "")
+    ) {
+      const folded = foldResponsesSse(
+        (await readResponseBody(upstream, {
+          maxBytes: MAX_BUFFERED_RESPONSE_BYTES,
+          signal: controller.signal,
+        })).toString("utf8"),
+      );
+      upstream = new Response(JSON.stringify(folded.body), {
+        status: folded.status,
+        headers: { "content-type": "application/json" },
+      });
+      upstreamStatus = upstream.status;
+    }
     const upstreamContentType = upstream.headers.get("content-type") || "";
     const createResponsePipeline = (contentType, preludeMs = EMPTY_COMPLETION_PRELUDE_MS) => {
       const usageObserver = new ResponseUsageTransform(contentType, {

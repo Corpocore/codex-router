@@ -1409,7 +1409,9 @@ test("router permits a compressed context larger than the encoded request limit"
   let receivedInputLength = 0;
   const native = await mockServer(async (request, response) => {
     const payload = await bodyJson(request);
-    receivedInputLength = payload.input.length;
+    // A substituted caller's string input reaches the backend as the one user
+    // message it stands for (#862); the text itself is what must survive.
+    receivedInputLength = payload.input[0].content[0].text.length;
     json(response, 200, { id: "large-context-ok", output: [] });
   });
   const routerPort = await openPort();
@@ -1522,7 +1524,11 @@ test("a small native turn is sent unencoded, exactly as it always was", async ()
     });
     assert.equal(response.status, 200, await response.text());
     assert.equal(seen[0].encoding, undefined);
-    assert.equal(seen[0].body.input, "hello");
+    // Unencoded, with the substituted caller's string shorthand in the list
+    // form the backend requires (#862).
+    assert.deepEqual(seen[0].body.input, [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] },
+    ]);
   } finally {
     await stopChild(router);
     await closeServer(native.server);
