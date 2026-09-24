@@ -1361,7 +1361,11 @@ function normalizeBody(buffer, contentType, route) {
     delete payload.temperature;
     delete payload.top_p;
   } else if (model.requestProfile === "xai-reasoning") {
-    if (!["low", "medium", "high"].includes(payload.reasoning_effort)) {
+    // The accepted rungs belong to the model: grok-4.5 stops at high, while
+    // grok-4.7 documents xhigh and publishes it, so it must not be clamped.
+    const accepted = ["low", "medium", "high"];
+    if (model.reasoningLevels?.some((level) => level?.effort === "xhigh")) accepted.push("xhigh");
+    if (!accepted.includes(payload.reasoning_effort)) {
       payload.reasoning_effort = "high";
     }
     delete payload.presence_penalty;
