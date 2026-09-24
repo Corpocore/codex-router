@@ -9671,6 +9671,91 @@ test("routed compaction bounds the image payload like a routed turn", async () =
   }
 });
 
+// The byte budget is a measurement of one provider on one day. A provider that
+// still refuses the image content must get the same model again with fewer
+// images - on a turn and on compaction - rather than a refusal the session can
+// never get past.
+for (const endpoint of ["responses", "responses/compact"]) {
+  test(`a refused image payload is resent with fewer images on /${endpoint}`, async () => {
+    const gatewayImageCounts = [];
+    const gateway = await mockServer(async (request, response) => {
+      const body = await bodyJson(request);
+      const count = body.input
+        .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+        .filter((part) => part.type === "input_image").length;
+      gatewayImageCounts.push(count);
+      if (count > 5) {
+        // What LiteLLM relays for OpenRouter's ceiling.
+        json(response, 413, {
+          error: {
+            message:
+              "litellm.APIError: APIError: OpenAIException - Downloaded image content cannot exceed 30MB",
+            type: null,
+            param: null,
+            code: "413",
+          },
+        });
+        return;
+      }
+      json(response, 200, {
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "ok" }],
+          },
+        ],
+      });
+    });
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-image-rejection-"));
+    const routerPort = await openPort();
+    const router = run("router.mjs", {
+      CODEX_ROUTER_PORT: String(routerPort),
+      CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+      CODEX_ROUTER_QUIET: "1",
+      MODEL_ROUTER_STATE_DIR: stateDir,
+    });
+    // Ten equal images, each far under both budgets, so the first attempt goes
+    // out whole and only the provider's refusal can trim it.
+    const input = Array.from({ length: 10 }, (_, index) => ({
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: `screenshot ${index}` },
+        {
+          type: "input_image",
+          image_url: `data:image/png;base64,${"A".repeat(62)}${String(index).padStart(2, "0")}`,
+        },
+      ],
+    }));
+
+    try {
+      await waitFor(`${routerBase(routerPort)}/models`, router);
+      const result = await fetch(`${routerBase(routerPort)}/${endpoint}`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer CODEX_CALLER_SECRET",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model: "kimi-oauth/k3", stream: false, input }),
+      });
+      assert.equal(result.status, 200, await result.text());
+      assert.deepEqual(gatewayImageCounts, [10, 5]);
+      await waitForStderr(router, /image payload refused, resending with fewer images 1\/2/u);
+
+      const events = await waitForUsageEvents(stateDir, 1, router);
+      const served = events.at(-1);
+      assert.equal(served.status, 200);
+      assert.equal(served.imageReferencesSeen, 10);
+      assert.equal(served.imageReferencesDropped, 5);
+    } finally {
+      await stopChild(router);
+      await closeServer(gateway.server);
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+}
+
 test("tool-result aging kill switch forwards the same large output", async () => {
   const gatewayBodies = [];
   const gateway = await mockServer(async (request, response) => {
