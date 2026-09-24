@@ -9600,6 +9600,77 @@ test("RTK shaping is reserved for routed compaction and ordinary turns keep newe
   }
 });
 
+// Compaction runs when a conversation is at its largest and replays every
+// image it holds. Unbounded, a screenshot-heavy session's compaction hit
+// OpenRouter's 413 ("Downloaded image content cannot exceed 30MB") on every
+// retry and the session could never take another turn.
+test("routed compaction bounds the image payload like a routed turn", async () => {
+  const gatewayBodies = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayBodies.push(await bodyJson(request));
+    json(response, 200, {
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "compact summary" }],
+        },
+      ],
+    });
+  });
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-compaction-images-"));
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+    MODEL_ROUTER_STATE_DIR: stateDir,
+  });
+  // 40 images at the resold 4096-token bound is 160K image tokens, over the
+  // 128K budget, so the oldest 8 have to become receipts.
+  const images = Array.from({ length: 40 }, (_, index) => ({
+    type: "message",
+    role: "user",
+    content: [
+      { type: "input_text", text: `screenshot ${index}` },
+      { type: "input_image", image_url: `data:image/png;base64,${"A".repeat(64)}${index}` },
+    ],
+  }));
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const compact = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "kimi-oauth/k3", input: images }),
+    });
+    assert.equal(compact.status, 200, await compact.text());
+
+    assert.equal(gatewayBodies.length, 1);
+    const parts = gatewayBodies[0].input.flatMap((item) =>
+      Array.isArray(item.content) ? item.content : []);
+    const sent = parts.filter((part) => part.type === "input_image");
+    const receipts = parts.filter((part) => /image omitted by Codex Router/u.test(part.text ?? ""));
+    assert.equal(sent.length, 32);
+    assert.equal(receipts.length, 8);
+    // Oldest first: the newest screenshot is still the one the model sees.
+    assert.match(sent.at(-1).image_url, /39$/u);
+    assert.match(sent[0].image_url, /8$/u);
+
+    const [event] = await waitForUsageEvents(stateDir, 1, router);
+    assert.equal(event.imageReferencesSeen, 40);
+    assert.equal(event.imageReferencesDropped, 8);
+    assert.equal(event.imageTokensSaved, 8 * 4096);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("tool-result aging kill switch forwards the same large output", async () => {
   const gatewayBodies = [];
   const gateway = await mockServer(async (request, response) => {

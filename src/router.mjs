@@ -3001,13 +3001,30 @@ async function summarize(request, payload, route, signal, { allowFailover = true
   // decide which source types and machine outcomes enter a kcr2 checkpoint.
   const prepared = prepareCompaction(normalized);
   const agingEnabled = toolResultAgingEnabled();
-  const aged = ageToolResults(normalized, {
+  const shaped = ageToolResults(normalized, {
     enabled: agingEnabled,
     // The client has already decided this conversation needs compaction. Dense
     // RTK-style shaping gives its summarizer more distinct evidence without
     // changing ordinary turns, and every shaped result keeps the exact rerun path.
     denseShaping: agingEnabled,
   });
+  // Compaction replays every image the conversation still holds, and it runs
+  // exactly when the conversation is at its largest, so it is the request most
+  // likely to cross the provider's per-request image ceiling. Unbounded, a
+  // screenshot-heavy session's compaction failed with OpenRouter's 413 and the
+  // client retried it before every following turn, stalling the session for
+  // good. Bound it the same way as a routed turn. The per-image token charge is
+  // the conversation's route; a failover hop reuses this input, and the byte
+  // budget that stops the 413 does not depend on the route.
+  const bounded = boundImagePayload(shaped.input, {
+    tokensPerImage: maxImageTokensForRoute(route),
+  });
+  // The image counts ride on the aging stats so every compaction return path
+  // meters them without each one having to carry a second field.
+  const aged = {
+    input: bounded.input,
+    stats: { ...shaped.stats, ...bounded.stats },
+  };
 
   // The models this compaction may be moved to, in order, starting with the one
   // the conversation is on. A provider already known to be empty is dropped
