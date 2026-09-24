@@ -66,8 +66,7 @@ import {
 import { moonshotSchemaRoute } from "./moonshot-schema-routes.mjs";
 import { reasoningTagStripperTransform } from "./reasoning-tag-stripper.mjs";
 import {
-  ZaiResponsesCompatTransform,
-  zaiResponsesCompatTransform,
+  messageEnvelopeCompatTransform,
 } from "./zai-responses-compat.mjs";
 import { reasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
 import { earlyToolItemDoneTransform } from "./early-tool-item-done.mjs";
@@ -4852,18 +4851,14 @@ async function handleResponses(request, response, requestUrl) {
             : undefined,
       });
       const transforms = [activity.progress.byteObserver(), usageObserver];
-      let envelopeCompat = route
-        ? zaiResponsesCompatTransform(route.provider, contentType)
+      // LiteLLM's Chat Completions bridge can stream assistant text after a
+      // reasoning item with no message envelope, on the reasoning item's own
+      // output index (Z.ai GLM-5.3, OpenRouter MiMo). Codex logs every such
+      // delta as `OutputTextDelta without active item`. The factory refuses
+      // native traffic and providers that do not cross that bridge.
+      const envelopeCompat = route
+        ? messageEnvelopeCompatTransform(providerForModel(route), contentType)
         : undefined;
-      // Z.ai Responses streams from GLM-5.3 can start assistant text after
-      // reasoning without its message envelope. Keep that repair provider-scoped.
-      if (
-        !envelopeCompat &&
-        route?.provider === "zai-coding" &&
-        String(contentType).toLowerCase().includes("text/event-stream")
-      ) {
-        envelopeCompat = new ZaiResponsesCompatTransform();
-      }
       if (envelopeCompat) transforms.push(envelopeCompat);
       // LiteLLM's Chat Completions bridge streams reasoning under hashed
       // per-delta ids that Codex drops; rebuild one reasoning item. Grok OAuth
