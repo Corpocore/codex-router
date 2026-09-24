@@ -2262,7 +2262,6 @@ async function readVisionEvidence({ url, engine, nativeCall, effort, question, k
 // ordinary tool loop did not (#256).
 function carryReasoningThroughInput(input, {
   nativeThinking = false,
-  removeCarriedReasoning = false,
   dropReasoning = false,
 } = {}) {
   if (!Array.isArray(input) || input.length < 2) return;
@@ -2296,7 +2295,7 @@ function carryReasoningThroughInput(input, {
     } else if (text && next) {
       if (next.type === "function_call" || next.type === "custom_tool_call") {
         input[end - 1] = assistantTextItem(text, nativeThinking);
-        if (removeCarriedReasoning) removed = end - index - 1;
+        removed = end - index - 1;
       } else if (next.type === "message" && next.role === "assistant") {
         // Merged into the assistant message rather than inserted in front of
         // it. A separate message would put two assistant turns back to back,
@@ -2305,11 +2304,11 @@ function carryReasoningThroughInput(input, {
         // LiteLLM folds a following function_call into the assistant message
         // it already emitted.
         input[end] = mergeAssistantText(next, text, nativeThinking);
-        if (removeCarriedReasoning) removed = end - index;
+        removed = end - index;
       }
     }
-    // Native Responses providers retain their existing item semantics. On
-    // Chat routes remove only a run successfully carried onto an assistant;
+    // Only Chat routes reach this helper (#840). Remove only a run
+    // successfully carried onto an assistant (or deliberately dropped);
     // unrelated or trailing reasoning must not be silently discarded.
     if (removed) input.splice(index, removed);
     index = end - removed - 1;
@@ -3531,20 +3530,21 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   const input = deepSeekResponses
     ? deepSeekResponsesInput(bridged)
     : Array.isArray(bridged) ? [...bridged] : bridged;
-  // Legacy Chat routes retain their existing reasoning carry. The native
-  // DeepSeek route already has exactly one plaintext reasoning item and must
-  // not copy it into an assistant message for Chat translation.
-  if (!deepSeekResponses) {
-    // Three replay channels, not two. A Chat route inside the native-reasoning
-    // contract carries its thinking as `thinking` parts for the forwarder to
-    // restore as reasoning_content; a Chat route outside it drops the thinking
-    // rather than replaying it as visible prose (#755); a native Responses
-    // provider keeps its existing item semantics untouched.
-    const nativeChatReasoning = chatCompletionsProvider && usesNativeChatReasoning(route);
+  // Only Chat Completions routes carry reasoning. Two replay channels: a Chat
+  // route inside the native-reasoning contract carries its thinking as
+  // `thinking` parts for the forwarder to restore as reasoning_content; a Chat
+  // route outside it drops the thinking rather than replaying it as visible
+  // prose (#755). A native Responses provider -- DeepSeek's dedicated route
+  // and every `openai-responses` provider, generic ones included -- keeps its
+  // reasoning items exactly as sent. The carry is not a no-op with its flags
+  // off: it rewrote reasoning before a tool call into assistant `output_text`
+  // and copied reasoning before an answer into the visible message, which a
+  // thinking model reads as something it once said and loops on (#840).
+  if (chatCompletionsProvider && !deepSeekResponses) {
+    const nativeChatReasoning = usesNativeChatReasoning(route);
     carryReasoningThroughInput(input, {
       nativeThinking: nativeChatReasoning,
-      removeCarriedReasoning: chatCompletionsProvider,
-      dropReasoning: chatCompletionsProvider && !nativeChatReasoning,
+      dropReasoning: !nativeChatReasoning,
     });
   }
   // Models marked requiresTrailingUserTurn reject requests ending with a model

@@ -13581,3 +13581,136 @@ test("an in-contract Chat route still carries its reasoning as thinking", async 
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+// #840. The Chat carry is not a no-op with its flags off: on a Responses-native
+// route it rewrote reasoning before a tool call into assistant `output_text`
+// and copied reasoning before an answer into the visible message as well. A
+// thinking model then reads its own past progress note as something it said
+// and repeats it. A Responses route must receive reasoning items unchanged.
+function genericResponsesReasoningFixture() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "routing-generic-responses-reasoning-"));
+  const providersFile = path.join(dir, "generic-providers.json");
+  const userModelsFile = path.join(dir, "user-models.json");
+  writeFileSync(providersFile, `${JSON.stringify({
+    version: 1,
+    providers: [{
+      id: "responses-gateway",
+      displayName: "Responses Gateway",
+      baseUrl: "https://responses.example.test/v1",
+      adapter: "openai-responses",
+      headers: {},
+      allowPrivate: false,
+      enabled: true,
+    }],
+  })}\n`);
+  writeFileSync(userModelsFile, `${JSON.stringify({
+    version: 1,
+    models: [{
+      slug: "responses-gateway/thinker",
+      gatewayModel: "responses-gateway-thinker",
+      compHash: "responses-gateway-thinker-user-v1",
+      upstreamModel: "thinker",
+      provider: "responses-gateway",
+      listed: true,
+      displayName: "Thinker (curated)",
+      description: "Generic Responses reasoning replay fixture.",
+      priority: 100,
+      defaultEffort: "high",
+      reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+      contextWindow: 131_072,
+      autoCompact: 110_000,
+      inputModalities: ["text"],
+    }],
+  })}\n`);
+  return { dir, providersFile, userModelsFile };
+}
+
+for (const [label, model, generic] of [
+  ["a generic openai-responses route", "responses-gateway/thinker", true],
+  ["a built-in openai-responses route", "meta/muse-spark-1.3", false],
+]) {
+  test(`${label} replays reasoning items unchanged, never as visible text (#840)`, async () => {
+    const gatewayBodies = [];
+    const gateway = await mockServer(async (request, response) => {
+      gatewayBodies.push(await bodyJson(request));
+      json(response, 200, {
+        id: "resp-840",
+        object: "response",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+      });
+    });
+    const fixture = generic ? genericResponsesReasoningFixture() : undefined;
+    const stateDir = fixture?.dir ?? mkdtempSync(path.join(os.tmpdir(), "responses-reasoning-"));
+    const routerPort = await openPort();
+    const router = run("router.mjs", {
+      CODEX_ROUTER_PORT: String(routerPort),
+      CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+      MODEL_ROUTER_STATE_DIR: stateDir,
+      ...(fixture
+        ? {
+            MODEL_ROUTER_GENERIC_PROVIDERS: fixture.providersFile,
+            MODEL_ROUTER_USER_MODELS: fixture.userModelsFile,
+          }
+        : {}),
+      CODEX_ROUTER_QUIET: "1",
+    });
+    const reasoning = (id, text) => ({
+      type: "reasoning",
+      id,
+      summary: [{ type: "summary_text", text }],
+      content: null,
+    });
+    const TOOL_THOUGHT = "I will list the directory first.";
+    const PROSE_THOUGHT = "prior reasoning summary unavailable";
+    const SECOND_THOUGHT = "One file is present.";
+    const input = [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "inspect it" }] },
+      // Reasoning, then a tool call.
+      reasoning("rs_tool", TOOL_THOUGHT),
+      { type: "function_call", call_id: "call_1", name: "shell", arguments: "{\"cmd\":\"ls\"}" },
+      { type: "function_call_output", call_id: "call_1", output: "a.txt" },
+      // Two consecutive reasoning items, then prose.
+      reasoning("rs_prose_a", PROSE_THOUGHT),
+      reasoning("rs_prose_b", SECOND_THOUGHT),
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "There is a.txt." }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "and now?" }] },
+      // Trailing reasoning with nothing after it.
+      reasoning("rs_trailing", "Nothing follows this."),
+    ];
+
+    try {
+      await waitFor(`${routerBase(routerPort)}/models`, router);
+      const response = await fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${CALLER_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model, stream: false, input }),
+      });
+      assert.equal(response.status, 200, `${await response.text()}\n${router.testErrors()}`);
+      const forwarded = gatewayBodies[0].input;
+
+      // Every reasoning item survives, in place, as a reasoning item.
+      assert.deepEqual(
+        forwarded.filter((item) => item?.type === "reasoning").map((item) => item.id),
+        ["rs_tool", "rs_prose_a", "rs_prose_b", "rs_trailing"],
+      );
+      assert.deepEqual(
+        forwarded.map((item) => item?.type),
+        input.map((item) => item.type),
+        "no item was inserted, merged away, or replaced",
+      );
+      // And no reasoning text leaked into a visible assistant message.
+      const visible = JSON.stringify(
+        forwarded.filter((item) => item?.type === "message" && item.role === "assistant"),
+      );
+      for (const thought of [TOOL_THOUGHT, PROSE_THOUGHT, SECOND_THOUGHT]) {
+        assert.equal(visible.includes(thought), false, `reasoning became visible text: ${visible}`);
+      }
+      assert.match(visible, /There is a\.txt\./);
+    } finally {
+      await stopChild(router);
+      await closeServer(gateway.server);
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+}
